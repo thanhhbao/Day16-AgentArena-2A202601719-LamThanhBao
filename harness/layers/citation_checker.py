@@ -86,7 +86,8 @@ class CitationChecker(Middleware):
             if not isinstance(text, str):
                 continue
 
-            doc = ctx.corpus.get(claim.get("doc_id"))
+            doc_id = claim.get("doc_id")
+            doc = ctx.corpus.get(doc_id) if isinstance(doc_id, str) else None
             if doc is not None and _line_supports(text, doc.body):
                 continue  # trích dẫn đã đúng, không sửa gì
 
@@ -97,6 +98,10 @@ class CitationChecker(Middleware):
             # Không tìm được nguồn nào đã quan sát -> để critic xử lý.
 
         report["citations"] = sorted(
-            {c.get("doc_id") for c in claims if isinstance(c, dict) and c.get("doc_id")}
+            {
+                c.get("doc_id")
+                for c in claims
+                if isinstance(c, dict) and isinstance(c.get("doc_id"), str) and c.get("doc_id")
+            }
         )
         return report

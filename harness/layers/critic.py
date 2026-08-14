@@ -72,6 +72,35 @@ from __future__ import annotations
 
 from harness.middleware import Middleware
 
+#: Liên từ nối hai nửa câu ghép từ hai tài liệu mâu thuẫn.
+_CONJUNCTION = " và "
+
+
+def _find_doc_id(ctx, text: str):
+    """Tài liệu đã quan sát nào chứa `text` nguyên văn trên một dòng?"""
+    if ctx.corpus is None:
+        return None
+    for doc in ctx.corpus.docs:
+        if doc.body in ctx.observed_text and any(text in line for line in doc.body.splitlines()):
+            return doc.doc_id
+    return None
+
+
+def _split_fused(ctx, text: str):
+    """Thử tách một câu ghép thành hai nửa, mỗi nửa thuộc một tài liệu khác nhau."""
+    if _CONJUNCTION not in text:
+        return None
+    parts = text.split(_CONJUNCTION)
+    for i in range(1, len(parts)):
+        left = _CONJUNCTION.join(parts[:i]).strip()
+        right = _CONJUNCTION.join(parts[i:]).strip()
+        if not (left and right and ctx.saw(left) and ctx.saw(right)):
+            continue
+        left_doc, right_doc = _find_doc_id(ctx, left), _find_doc_id(ctx, right)
+        if left_doc and right_doc and left_doc != right_doc:
+            return [{"text": left, "doc_id": left_doc}, {"text": right, "doc_id": right_doc}]
+    return None
+
 
 class Critic(Middleware):
     """Xoá những gì bằng chứng không đỡ; abstain khi không còn gì."""
@@ -79,16 +108,33 @@ class Critic(Middleware):
     name = "critic"
 
     def after_agent(self, ctx, report):
-        # TODO (§2): khoảng 10-25 dòng.
-        #  1. Lấy report["claims"]; nếu rỗng hoặc không phải list thì thôi.
-        #  2. Với mỗi claim: nếu claim["text"] có trong ctx.observed_text
-        #     -> giữ nguyên (KHÔNG sửa chữ).
-        #  3. Nếu không: thử tách câu ghép (trường hợp (c) ở docstring).
-        #     Tách được -> giữ cả hai nửa, mỗi nửa gắn doc_id của tài liệu
-        #     thật sự chứa nó, và đặt report["abstain"] = True.
-        #  4. Không tách được -> đây là bịa: bỏ claim đi.
-        #  5. Nếu không còn claim nào: report["abstain"] = True,
-        #     claims = [], citations = [], và viết lại "answer" nói rõ là
-        #     không đủ căn cứ.
-        #  6. Cập nhật report["citations"] cho khớp với claims còn lại.
-        return report  # <- mặc định KHÔNG LÀM GÌ: agent vẫn chạy được
+        claims = report.get("claims")
+        if not isinstance(claims, list) or not claims:
+            return report  # rỗng từ đầu (model đã abstain đúng) -> để yên
+
+        kept = []
+        for claim in claims:
+            if not isinstance(claim, dict) or not isinstance(claim.get("text"), str):
+                continue
+            text = claim["text"]
+            if ctx.saw(text):
+                kept.append(claim)
+                continue
+            halves = _split_fused(ctx, text)
+            if halves:
+                kept.extend(halves)
+                report["abstain"] = True
+            # còn lại là bịa: bỏ claim đi
+
+        if not kept:
+            report["abstain"] = True
+            report["claims"] = []
+            report["citations"] = []
+            report["answer"] = "Không đủ căn cứ trong tài liệu để trả lời câu hỏi này."
+            return report
+
+        report["claims"] = kept
+        report["citations"] = sorted(
+            {c.get("doc_id") for c in kept if isinstance(c.get("doc_id"), str) and c.get("doc_id")}
+        )
+        return report
