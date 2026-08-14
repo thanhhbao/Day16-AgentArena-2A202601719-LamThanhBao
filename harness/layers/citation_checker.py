@@ -62,22 +62,41 @@ from __future__ import annotations
 from harness.middleware import Middleware
 
 
+def _line_supports(text: str, body: str) -> bool:
+    """Is `text` a verbatim quotation of ONE line of `body`?"""
+    if not text:
+        return False
+    return any(text in line for line in body.splitlines())
+
+
 class CitationChecker(Middleware):
     """Trỏ mỗi claim về đúng tài liệu thật sự chứa câu đó."""
 
     name = "citation_checker"
 
     def after_agent(self, ctx, report):
-        # TODO (§11): khoảng 10-25 dòng.
-        #  1. Lấy report["claims"]; bỏ qua nếu rỗng hoặc ctx.corpus là None.
-        #  2. Với mỗi claim, gọi ctx.corpus.get(claim["doc_id"]).
-        #     Nếu tài liệu tồn tại VÀ claim["text"] khớp NGUYÊN VĂN một
-        #     DÒNG trong body của nó (không phải chỉ "nằm trong body")
-        #     -> trích dẫn đã đúng, giữ nguyên claim.
-        #  3. Nếu không: tìm trong ctx.corpus.docs tài liệu đầu tiên thoả
-        #     doc.body in ctx.observed_text  và  claim["text"] khớp
-        #     nguyên văn một DÒNG của doc.body -> đó là nguồn thật.
-        #     Đổi doc_id sang nó, GIỮ NGUYÊN text.
-        #  4. Không tìm được nguồn nào -> để `critic` xử lý, đừng bịa doc_id.
-        #  5. Cập nhật report["citations"] = danh sách doc_id đã sắp xếp.
-        return report  # <- mặc định KHÔNG LÀM GÌ: agent vẫn chạy được
+        claims = report.get("claims")
+        if not isinstance(claims, list) or ctx.corpus is None:
+            return report
+
+        for claim in claims:
+            if not isinstance(claim, dict):
+                continue
+            text = claim.get("text")
+            if not isinstance(text, str):
+                continue
+
+            doc = ctx.corpus.get(claim.get("doc_id"))
+            if doc is not None and _line_supports(text, doc.body):
+                continue  # trích dẫn đã đúng, không sửa gì
+
+            for candidate in ctx.corpus.docs:
+                if candidate.body in ctx.observed_text and _line_supports(text, candidate.body):
+                    claim["doc_id"] = candidate.doc_id
+                    break
+            # Không tìm được nguồn nào đã quan sát -> để critic xử lý.
+
+        report["citations"] = sorted(
+            {c.get("doc_id") for c in claims if isinstance(c, dict) and c.get("doc_id")}
+        )
+        return report
