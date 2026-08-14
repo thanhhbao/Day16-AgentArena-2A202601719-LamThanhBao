@@ -87,19 +87,28 @@ def _find_doc_id(ctx, text: str):
 
 
 def _split_fused(ctx, text: str):
-    """Thử tách một câu ghép thành hai nửa, mỗi nửa thuộc một tài liệu khác nhau."""
+    """Thử tách một câu ghép thành hai nửa, mỗi nửa thuộc một tài liệu khác nhau.
+
+    Thử TỪNG VỊ TRÍ KÝ TỰ của liên từ, không phải từng token đã tách rời:
+    khi câu ghép chứa "và" liên tiếp (mô hình nối hai vế bằng " và " ngay
+    sau khi vế đầu tự nó đã kết thúc bằng chữ "và"), tách theo token gộp
+    nhầm điểm cắt và không bao giờ thử đúng vị trí — đo được trên
+    pub-04-lam-viec-tu-xa.
+    """
     if _CONJUNCTION not in text:
         return None
-    parts = text.split(_CONJUNCTION)
-    for i in range(1, len(parts)):
-        left = _CONJUNCTION.join(parts[:i]).strip()
-        right = _CONJUNCTION.join(parts[i:]).strip()
-        if not (left and right and ctx.saw(left) and ctx.saw(right)):
-            continue
-        left_doc, right_doc = _find_doc_id(ctx, left), _find_doc_id(ctx, right)
-        if left_doc and right_doc and left_doc != right_doc:
-            return [{"text": left, "doc_id": left_doc}, {"text": right, "doc_id": right_doc}]
-    return None
+    start = 0
+    while True:
+        idx = text.find(_CONJUNCTION, start)
+        if idx == -1:
+            return None
+        left = text[:idx].strip()
+        right = text[idx + len(_CONJUNCTION):].strip()
+        if left and right and ctx.saw(left) and ctx.saw(right):
+            left_doc, right_doc = _find_doc_id(ctx, left), _find_doc_id(ctx, right)
+            if left_doc and right_doc and left_doc != right_doc:
+                return [{"text": left, "doc_id": left_doc}, {"text": right, "doc_id": right_doc}]
+        start = idx + 1
 
 
 class Critic(Middleware):
